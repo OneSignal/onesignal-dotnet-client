@@ -2830,7 +2830,7 @@ namespace OneSignalApi.Api
             // make the HTTP request
             var localVarResponse = await this.AsynchronousClient.PostAsync<CreateNotificationSuccessResponse>("/notifications", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
 
-            if (this.ExceptionFactory != null)
+            if (localVarResponse.StatusCode != HttpStatusCode.OK && this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("CreateNotification", localVarResponse);
                 if (_exception != null)
