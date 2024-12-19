@@ -9,37 +9,31 @@
  */
 
 
+using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
+using Polly;
+using RestSharp;
+using RestSharp.Serializers;
+using RestSharp.Serializers.Json;
 using System;
-using System.Collections;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Reflection;
-using System.Runtime.Serialization;
-using System.Runtime.Serialization.Formatters;
-using System.Text;
-using System.Threading;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Serialization;
-using ErrorEventArgs = Newtonsoft.Json.Serialization.ErrorEventArgs;
-using RestSharp;
-using RestSharp.Deserializers;
 using RestSharpMethod = RestSharp.Method;
-using Polly;
 
 namespace OneSignalApi.Client
 {
     /// <summary>
     /// Allows RestSharp to Serialize/Deserialize JSON using our custom logic, but only when ContentType is JSON.
     /// </summary>
-    internal class CustomJsonCodec : RestSharp.Serializers.ISerializer, RestSharp.Deserializers.IDeserializer
+    internal class CustomJsonCodec : IRestSerializer, ISerializer, IDeserializer
     {
         private readonly IReadableConfiguration _configuration;
         private static readonly string _contentType = "application/json";
+
         private readonly JsonSerializerSettings _serializerSettings = new JsonSerializerSettings
         {
             // OpenAPI generated types generally hide default constructors.
@@ -53,6 +47,12 @@ namespace OneSignalApi.Client
             }
         };
 
+        public ContentType ContentType { get; set; } = ContentType.Json;
+
+        public ISerializer Serializer => this;
+
+        public IDeserializer Deserializer => this;
+
         public CustomJsonCodec(IReadableConfiguration configuration)
         {
             _configuration = configuration;
@@ -64,11 +64,6 @@ namespace OneSignalApi.Client
             _configuration = configuration;
         }
 
-        /// <summary>
-        /// Serialize the object into a JSON string.
-        /// </summary>
-        /// <param name="obj">Object to be serialized.</param>
-        /// <returns>A JSON string.</returns>
         public string Serialize(object obj)
         {
             if (obj != null && obj is OneSignalApi.Model.AbstractOpenAPISchema)
@@ -78,23 +73,22 @@ namespace OneSignalApi.Client
             }
             else
             {
-                return JsonConvert.SerializeObject(obj, _serializerSettings);
+                var serialized = JsonConvert.SerializeObject(obj, _serializerSettings);
+                return serialized;
             }
         }
 
-        public T Deserialize<T>(IRestResponse response)
+        public string Serialize(Parameter parameter)
         {
-            var result = (T)Deserialize(response, typeof(T));
-            return result;
+            return Serialize(parameter.Value);
         }
 
-        /// <summary>
-        /// Deserialize the JSON string into a proper object.
-        /// </summary>
-        /// <param name="response">The HTTP response.</param>
-        /// <param name="type">Object type.</param>
-        /// <returns>Object representation of the JSON string.</returns>
-        internal object Deserialize(IRestResponse response, Type type)
+        public T Deserialize<T>(RestResponse response)
+        {
+            return (T)Deserialize(response, typeof(T));
+        }
+
+        internal object Deserialize(RestResponse response, Type type)
         {
             if (type == typeof(byte[])) // return byte array
             {
@@ -147,16 +141,26 @@ namespace OneSignalApi.Client
             }
         }
 
+        public string[] AcceptedContentTypes => new string[]
+        {
+            "application/json"
+        };
+
+        public SupportsContentType SupportsContentType => contentType => contentType.Value.Contains("json");
+
+        public DataFormat DataFormat => DataFormat.Json;
+
         public string RootElement { get; set; }
         public string Namespace { get; set; }
         public string DateFormat { get; set; }
 
-        public string ContentType
-        {
-            get { return _contentType; }
-            set { throw new InvalidOperationException("Not allowed to set content type."); }
-        }
+        //public string ContentType
+        //{
+        //    get { return _contentType; }
+        //    set { throw new InvalidOperationException("Not allowed to set content type."); }
+        //}
     }
+
     /// <summary>
     /// Provides a default implementation of an Api client (both synchronous and asynchronous implementations),
     /// encapsulating general REST accessor use cases.
@@ -187,14 +191,14 @@ namespace OneSignalApi.Client
         /// Allows for extending request processing for <see cref="ApiClient"/> generated code.
         /// </summary>
         /// <param name="request">The RestSharp request object</param>
-        partial void InterceptRequest(IRestRequest request);
+        partial void InterceptRequest(RestRequest request);
 
         /// <summary>
         /// Allows for extending response processing for <see cref="ApiClient"/> generated code.
         /// </summary>
         /// <param name="request">The RestSharp request object</param>
         /// <param name="response">The RestSharp response object</param>
-        partial void InterceptResponse(IRestRequest request, IRestResponse response);
+        partial void InterceptResponse(RestRequest request, RestResponse response);
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ApiClient" />, defaulting to the global configurations' base url.
@@ -229,25 +233,25 @@ namespace OneSignalApi.Client
             switch (method)
             {
                 case HttpMethod.Get:
-                    other = RestSharpMethod.GET;
+                    other = RestSharpMethod.Get;
                     break;
                 case HttpMethod.Post:
-                    other = RestSharpMethod.POST;
+                    other = RestSharpMethod.Post;
                     break;
                 case HttpMethod.Put:
-                    other = RestSharpMethod.PUT;
+                    other = RestSharpMethod.Put;
                     break;
                 case HttpMethod.Delete:
-                    other = RestSharpMethod.DELETE;
+                    other = RestSharpMethod.Delete;
                     break;
                 case HttpMethod.Head:
-                    other = RestSharpMethod.HEAD;
+                    other = RestSharpMethod.Head;
                     break;
                 case HttpMethod.Options:
-                    other = RestSharpMethod.OPTIONS;
+                    other = RestSharpMethod.Options;
                     break;
                 case HttpMethod.Patch:
-                    other = RestSharpMethod.PATCH;
+                    other = RestSharpMethod.Patch;
                     break;
                 default:
                     throw new ArgumentOutOfRangeException("method", method, null);
@@ -278,10 +282,11 @@ namespace OneSignalApi.Client
             if (options == null) throw new ArgumentNullException("options");
             if (configuration == null) throw new ArgumentNullException("configuration");
 
-            RestRequest request = new RestRequest(Method(method))
+            RestRequest request = new RestRequest
             {
                 Resource = path,
-                JsonSerializer = new CustomJsonCodec(SerializerSettings, configuration)
+                Method = Method(method),
+                //JsonSerializer = new CustomJsonCodec(SerializerSettings, configuration)
             };
 
             if (options.PathParameters != null)
@@ -380,9 +385,11 @@ namespace OneSignalApi.Client
                         var bytes = ClientUtils.ReadAsBytes(file);
                         var fileStream = file as FileStream;
                         if (fileStream != null)
-                            request.Files.Add(FileParameter.Create(fileParam.Key, bytes, System.IO.Path.GetFileName(fileStream.Name)));
+                        {
+                            request.AddFile(fileParam.Key, bytes, System.IO.Path.GetFileName(fileStream.Name));
+                        }
                         else
-                            request.Files.Add(FileParameter.Create(fileParam.Key, bytes, "no_file_name_provided"));
+                            request.AddFile(fileParam.Key, bytes, "no_file_name_provided");
                     }
                 }
             }
@@ -391,14 +398,14 @@ namespace OneSignalApi.Client
             {
                 foreach (var cookie in options.Cookies)
                 {
-                    request.AddCookie(cookie.Name, cookie.Value);
+                    request.AddCookie(cookie.Name, cookie.Value, cookie.Path, cookie.Domain);
                 }
             }
 
             return request;
         }
 
-        private ApiResponse<T> ToApiResponse<T>(IRestResponse<T> response)
+        private ApiResponse<T> ToApiResponse<T>(RestResponse<T> response)
         {
             T result = response.Data;
             string rawContent = response.Content;
@@ -419,7 +426,7 @@ namespace OneSignalApi.Client
 
             if (response.Cookies != null)
             {
-                foreach (var responseCookies in response.Cookies)
+                foreach (Cookie responseCookies in response.Cookies)
                 {
                     transformed.Cookies.Add(
                         new Cookie(
@@ -437,61 +444,65 @@ namespace OneSignalApi.Client
         private ApiResponse<T> Exec<T>(RestRequest req, RequestOptions options, IReadableConfiguration configuration)
         {
             var baseUrl = configuration.GetOperationServerUrl(options.Operation, options.OperationIndex) ?? _baseUrl;
-            RestClient client = new RestClient(baseUrl);
 
-            client.ClearHandlers();
-            var existingDeserializer = req.JsonSerializer as IDeserializer;
-            if (existingDeserializer != null)
+            var restClientOptions = new RestClientOptions(baseUrl)
             {
-                client.AddHandler("application/json", () => existingDeserializer);
-                client.AddHandler("text/json", () => existingDeserializer);
-                client.AddHandler("text/x-json", () => existingDeserializer);
-                client.AddHandler("text/javascript", () => existingDeserializer);
-                client.AddHandler("*+json", () => existingDeserializer);
-            }
-            else
-            {
-                var customDeserializer = new CustomJsonCodec(SerializerSettings, configuration);
-                client.AddHandler("application/json", () => customDeserializer);
-                client.AddHandler("text/json", () => customDeserializer);
-                client.AddHandler("text/x-json", () => customDeserializer);
-                client.AddHandler("text/javascript", () => customDeserializer);
-                client.AddHandler("*+json", () => customDeserializer);
-            }
+                MaxTimeout = configuration.Timeout,
+            };
 
-            var xmlDeserializer = new XmlDeserializer();
-            client.AddHandler("application/xml", () => xmlDeserializer);
-            client.AddHandler("text/xml", () => xmlDeserializer);
-            client.AddHandler("*+xml", () => xmlDeserializer);
-            client.AddHandler("*", () => xmlDeserializer);
+            //client.ClearHandlers();
+            //var existingDeserializer = req.JsonSerializer as IDeserializer;
+            //if (existingDeserializer != null)
+            //{
+            //    client.AddHandler("application/json", () => existingDeserializer);
+            //    client.AddHandler("text/json", () => existingDeserializer);
+            //    client.AddHandler("text/x-json", () => existingDeserializer);
+            //    client.AddHandler("text/javascript", () => existingDeserializer);
+            //    client.AddHandler("*+json", () => existingDeserializer);
+            //}
+            //else
+            //{
+            //    var customDeserializer = new CustomJsonCodec(SerializerSettings, configuration);
+            //    client.AddHandler("application/json", () => customDeserializer);
+            //    client.AddHandler("text/json", () => customDeserializer);
+            //    client.AddHandler("text/x-json", () => customDeserializer);
+            //    client.AddHandler("text/javascript", () => customDeserializer);
+            //    client.AddHandler("*+json", () => customDeserializer);
+            //}
 
-            client.Timeout = configuration.Timeout;
+            //var xmlDeserializer = new XmlDeserializer();
+            //client.AddHandler("application/xml", () => xmlDeserializer);
+            //client.AddHandler("text/xml", () => xmlDeserializer);
+            //client.AddHandler("*+xml", () => xmlDeserializer);
+            //client.AddHandler("*", () => xmlDeserializer);
+
 
             if (configuration.Proxy != null)
             {
-                client.Proxy = configuration.Proxy;
+                restClientOptions.Proxy = configuration.Proxy;
             }
 
             if (configuration.UserAgent != null)
             {
-                client.UserAgent = configuration.UserAgent;
+                restClientOptions.UserAgent = configuration.UserAgent;
             }
 
             if (configuration.ClientCertificates != null)
             {
-                client.ClientCertificates = configuration.ClientCertificates;
+                restClientOptions.ClientCertificates = configuration.ClientCertificates;
             }
+
+            RestClient client = new RestClient(restClientOptions, configureSerialization: s => s.UseSerializer(() => new CustomJsonCodec(SerializerSettings, configuration)));
 
             InterceptRequest(req);
 
-            IRestResponse<T> response;
+            RestResponse<T> response;
             if (RetryConfiguration.RetryPolicy != null)
             {
                 var policy = RetryConfiguration.RetryPolicy;
                 var policyResult = policy.ExecuteAndCapture(() => client.Execute(req));
-                response = (policyResult.Outcome == OutcomeType.Successful) ? client.Deserialize<T>(policyResult.Result) : new RestResponse<T>
+                response = (policyResult.Outcome == OutcomeType.Successful) ? client.Deserialize<T>(policyResult.Result) : new RestResponse<T>(req)
                 {
-                    Request = req,
                     ErrorException = policyResult.FinalException
                 };
             }
@@ -532,7 +543,7 @@ namespace OneSignalApi.Client
             if (response.Cookies != null && response.Cookies.Count > 0)
             {
                 if (result.Cookies == null) result.Cookies = new List<Cookie>();
-                foreach (var restResponseCookie in response.Cookies)
+                foreach (Cookie restResponseCookie in response.Cookies)
                 {
                     var cookie = new Cookie(
                         restResponseCookie.Name,
@@ -561,61 +572,66 @@ namespace OneSignalApi.Client
         private async Task<ApiResponse<T>> ExecAsync<T>(RestRequest req, RequestOptions options, IReadableConfiguration configuration, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken))
         {
             var baseUrl = configuration.GetOperationServerUrl(options.Operation, options.OperationIndex) ?? _baseUrl;
-            RestClient client = new RestClient(baseUrl);
 
-            client.ClearHandlers();
-            var existingDeserializer = req.JsonSerializer as IDeserializer;
-            if (existingDeserializer != null)
+            var restClientOptions = new RestClientOptions(baseUrl)
             {
-                client.AddHandler("application/json", () => existingDeserializer);
-                client.AddHandler("text/json", () => existingDeserializer);
-                client.AddHandler("text/x-json", () => existingDeserializer);
-                client.AddHandler("text/javascript", () => existingDeserializer);
-                client.AddHandler("*+json", () => existingDeserializer);
-            }
-            else
-            {
-                var customDeserializer = new CustomJsonCodec(SerializerSettings, configuration);
-                client.AddHandler("application/json", () => customDeserializer);
-                client.AddHandler("text/json", () => customDeserializer);
-                client.AddHandler("text/x-json", () => customDeserializer);
-                client.AddHandler("text/javascript", () => customDeserializer);
-                client.AddHandler("*+json", () => customDeserializer);
-            }
+                MaxTimeout = configuration.Timeout,
+            };
 
-            var xmlDeserializer = new XmlDeserializer();
-            client.AddHandler("application/xml", () => xmlDeserializer);
-            client.AddHandler("text/xml", () => xmlDeserializer);
-            client.AddHandler("*+xml", () => xmlDeserializer);
-            client.AddHandler("*", () => xmlDeserializer);
+            //client.ClearHandlers();
+            //var existingDeserializer = req.JsonSerializer as IDeserializer;
+            //if (existingDeserializer != null)
+            //{
+            //    client.AddHandler("application/json", () => existingDeserializer);
+            //    client.AddHandler("text/json", () => existingDeserializer);
+            //    client.AddHandler("text/x-json", () => existingDeserializer);
+            //    client.AddHandler("text/javascript", () => existingDeserializer);
+            //    client.AddHandler("*+json", () => existingDeserializer);
+            //}
+            //else
+            //{
+            //    var customDeserializer = new CustomJsonCodec(SerializerSettings, configuration);
+            //    client.AddHandler("application/json", () => customDeserializer);
+            //    client.AddHandler("text/json", () => customDeserializer);
+            //    client.AddHandler("text/x-json", () => customDeserializer);
+            //    client.AddHandler("text/javascript", () => customDeserializer);
+            //    client.AddHandler("*+json", () => customDeserializer);
+            //}
 
-            client.Timeout = configuration.Timeout;
+            //var xmlDeserializer = new XmlDeserializer();
+            //client.AddHandler("application/xml", () => xmlDeserializer);
+            //client.AddHandler("text/xml", () => xmlDeserializer);
+            //client.AddHandler("*+xml", () => xmlDeserializer);
+            //client.AddHandler("*", () => xmlDeserializer);
+
+            //client.Timeout = configuration.Timeout;
 
             if (configuration.Proxy != null)
             {
-                client.Proxy = configuration.Proxy;
+                restClientOptions.Proxy = configuration.Proxy;
             }
 
             if (configuration.UserAgent != null)
             {
-                client.UserAgent = configuration.UserAgent;
+                restClientOptions.UserAgent = configuration.UserAgent;
             }
 
             if (configuration.ClientCertificates != null)
             {
-                client.ClientCertificates = configuration.ClientCertificates;
+                restClientOptions.ClientCertificates = configuration.ClientCertificates;
             }
+
+            RestClient client = new RestClient(restClientOptions, configureSerialization: s => s.UseSerializer(() => new CustomJsonCodec(SerializerSettings, configuration)));
 
             InterceptRequest(req);
 
-            IRestResponse<T> response;
+            RestResponse<T> response;
             if (RetryConfiguration.AsyncRetryPolicy != null)
             {
                 var policy = RetryConfiguration.AsyncRetryPolicy;
                 var policyResult = await policy.ExecuteAndCaptureAsync((ct) => client.ExecuteAsync(req, ct), cancellationToken).ConfigureAwait(false);
-                response = (policyResult.Outcome == OutcomeType.Successful) ? client.Deserialize<T>(policyResult.Result) : new RestResponse<T>
+                response = (policyResult.Outcome == OutcomeType.Successful) ? client.Deserialize<T>(policyResult.Result) : new RestResponse<T>(req)
                 {
-                    Request = req,
                     ErrorException = policyResult.FinalException
                 };
             }
@@ -649,7 +665,7 @@ namespace OneSignalApi.Client
             if (response.Cookies != null && response.Cookies.Count > 0)
             {
                 if (result.Cookies == null) result.Cookies = new List<Cookie>();
-                foreach (var restResponseCookie in response.Cookies)
+                foreach (Cookie restResponseCookie in response.Cookies)
                 {
                     var cookie = new Cookie(
                         restResponseCookie.Name,
